@@ -369,7 +369,7 @@ func (s *Session) ReceiveMessage(ctx context.Context) ([]byte, error) {
 	resultChannel := make(chan receiveMessageResult)
 
 	go func() {
-		msg, err := s.Session.ReceiveMessage(ctx)
+		msg, err := s.Session.ReceiveDatagram(ctx)
 		resultChannel <- receiveMessageResult{msg: msg, err: err}
 	}()
 
@@ -400,7 +400,7 @@ func (s *Session) SendMessage(msg []byte) error {
 	// "Quarter Stream ID" (!) of associated request stream, as per https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram
 	buf.Write(quicvarint.Append(nil, uint64(s.StreamID()/4)))
 	buf.Write(msg)
-	return s.Session.SendMessage(buf.Bytes())
+	return s.Session.SendDatagram(buf.Bytes())
 }
 
 // AcceptStream accepts an incoming (that is, client-initated) bidirectional stream, blocking if necessary until one is available. Supply your own context, or use the WebTransport
