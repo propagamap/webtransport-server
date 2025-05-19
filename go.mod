@@ -1,4 +1,4 @@
-module github.com/propagamap/webtransport-go
+module github.com/propagamap/webtransport-server
 
 go 1.22.0
 
