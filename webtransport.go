@@ -111,7 +111,7 @@ type Server struct {
 }
 
 // Starts a WebTransport server and blocks while it's running. Cancel the supplied Context to stop the server.
-func (s *Server) Run(ctx context.Context) error {
+func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	if s.Handler == nil {
 		s.Handler = http.DefaultServeMux
 	}
@@ -120,7 +120,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.QuicConfig.EnableDatagrams = true
 
-	listener, err := quic.ListenAddr(s.ListenAddr, s.generateTLSConfig(), (*quic.Config)(s.QuicConfig))
+	listener, err := quic.ListenAddr(s.ListenAddr, tlsConfig, (*quic.Config)(s.QuicConfig))
 	if err != nil {
 		return err
 	}
@@ -238,24 +238,6 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 	}()
 
 	s.ServeHTTP(rw, req)
-}
-
-func (s *Server) generateTLSConfig() *tls.Config {
-	var cert tls.Certificate
-	var err error
-
-	if s.TLSCert.Path != "" && s.TLSKey.Path != "" {
-		cert, err = tls.LoadX509KeyPair(s.TLSCert.Path, s.TLSKey.Path)
-	} else {
-		cert, err = tls.X509KeyPair(s.TLSCert.Data, s.TLSKey.Data)
-	}
-	if err != nil {
-		log.Fatal(err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{"h3", "h3-32", "h3-31", "h3-30", "h3-29"},
-	}
 }
 
 func (s *Server) validateOrigin(origin string) bool {
