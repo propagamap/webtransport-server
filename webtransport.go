@@ -113,6 +113,14 @@ type Server struct {
 
 // Starts a WebTransport server and blocks while it's running. Cancel the supplied Context to stop the server.
 func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
+	if s.Handler == nil {
+		s.Handler = http.DefaultServeMux
+	}
+	if s.QuicConfig == nil {
+		s.QuicConfig = &QuicConfig{}
+	}
+	s.QuicConfig.EnableDatagrams = true
+
 	addr, err := net.ResolveUDPAddr("udp", s.ListenAddr)
 	if err != nil {
 		return err
@@ -130,37 +138,24 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		QUICConfig: (*quic.Config)(s.QuicConfig),
 	}
 	ln, _ := tr.ListenEarly(tlsConf, quicConf)
+
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
+
 	err = server.ServeListener(ln)
 	if err != nil {
 		return err
 	}
-	return nil
 
-	// if s.Handler == nil {
-	// 	s.Handler = http.DefaultServeMux
-	// }
-	// if s.QuicConfig == nil {
-	// 	s.QuicConfig = &QuicConfig{}
-	// }
-	// s.QuicConfig.EnableDatagrams = true
-
-	// listener, err := quic.ListenAddr(s.ListenAddr, tlsConfig, (*quic.Config)(s.QuicConfig))
-	// if err != nil {
-	// 	return err
-	// }
-
-	// go func() {
-	// 	<-ctx.Done()
-	// 	listener.Close()
-	// }()
-
-	// for {
-	// 	sess, err := listener.Accept(ctx)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	go s.handleSession(ctx, sess)
-	// }
+	for {
+		sess, err := ln.Accept(ctx)
+		if err != nil {
+			return err
+		}
+		go s.handleSession(ctx, sess)
+	}
 }
 
 func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
