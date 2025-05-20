@@ -74,8 +74,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/propagamap/webtransport-server/internal"
 	"github.com/marten-seemann/qpack"
-	h3 "github.com/propagamap/webtransport-server/internal"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
@@ -213,34 +213,30 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 		return
 	}
 	req.RemoteAddr = sess.RemoteAddr().String()
+
 	req = req.WithContext(ctx)
 	rw := h3.NewResponseWriter(requestStream)
 	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
+	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
 
-	if protocol == "webtransport" {
-		req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
-		if !s.validateOrigin(req.Header.Get("origin")) {
-			req.Body.(*Session).RejectSession(http.StatusBadRequest)
-			cancelFunction()
-			requestStream.Close()
-			return
-		}
-		// Drain request stream for WebTransport
-		go func() {
-			for {
-				buf := make([]byte, 1024)
-				_, err := requestStream.Read(buf)
-				if err != nil {
-					cancelFunction()
-					requestStream.Close()
-					break
-				}
-			}
-		}()
-	} else {
-		// For HTTP/3 normal, make sure req.Body is a valid io.ReadCloser
-		req.Body = requestStream
+	if protocol != "webtransport" || !s.validateOrigin(req.Header.Get("origin")) {
+		req.Body.(*Session).RejectSession(http.StatusBadRequest)
+		return
 	}
+
+	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
+	go func() {
+		for {
+			buf := make([]byte, 1024)
+			_, err := requestStream.Read(buf)
+			if err != nil {
+				cancelFunction()
+				requestStream.Close()
+				break
+			}
+		}
+	}()
+
 	s.ServeHTTP(rw, req)
 }
 
