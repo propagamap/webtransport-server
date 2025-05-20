@@ -71,7 +71,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 
@@ -121,44 +120,33 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	}
 	s.QuicConfig.EnableDatagrams = true
 
-	addr, err := net.ResolveUDPAddr("udp", s.ListenAddr)
-	if err != nil {
-		return err
-	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return err
-	}
-	tr := quic.Transport{Conn: conn}
 	tlsConf := http3.ConfigureTLSConfig(tlsConfig) // use your tls.Config here
-	quicConf := &quic.Config{}                     // QUIC connection options
-	server := http3.Server{
-		Addr:       s.ListenAddr,
-		Handler:    s.Handler,
-		QUICConfig: (*quic.Config)(s.QuicConfig),
+
+	listener, err := quic.ListenAddr(s.ListenAddr, tlsConf, (*quic.Config)(s.QuicConfig))
+	if err != nil {
+		return err
 	}
-	ln, _ := tr.ListenEarly(tlsConf, quicConf)
 
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		listener.Close()
 	}()
 
-	err = server.ServeListener(ln)
-	if err != nil {
-		return err
-	}
-
 	for {
-		sess, err := ln.Accept(ctx)
+		sess, err := listener.Accept(ctx)
 		if err != nil {
 			return err
 		}
-		go s.handleSession(ctx, sess)
+		http3srv := &http3.Server{
+			Addr:       s.ListenAddr,
+			Handler:    s.Handler,
+			QUICConfig: (*quic.Config)(s.QuicConfig),
+		}
+		go s.handleSession(ctx, sess, http3srv)
 	}
 }
 
-func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
+func (s *Server) handleSession(ctx context.Context, sess quic.Connection, http3srv *http3.Server) {
 	serverControlStream, err := sess.OpenUniStream()
 	if err != nil {
 		return
@@ -226,6 +214,12 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 		return
 	}
 	req, protocol, err := h3.RequestFromHeaders(hfs)
+
+	if protocol != "webtransport" {
+		http3srv.ListenAndServe()
+		return
+	}
+
 	if err != nil {
 		cancelFunction()
 		requestStream.Close()
@@ -238,11 +232,10 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
 	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
 
-	if protocol != "webtransport" || !s.validateOrigin(req.Header.Get("origin")) {
+	if !s.validateOrigin(req.Header.Get("origin")) {
 		req.Body.(*Session).RejectSession(http.StatusBadRequest)
 		return
 	}
-
 	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
 	go func() {
 		for {
@@ -255,7 +248,6 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 			}
 		}
 	}()
-
 	s.ServeHTTP(rw, req)
 }
 
