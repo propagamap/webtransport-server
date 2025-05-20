@@ -137,16 +137,11 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		if err != nil {
 			return err
 		}
-		http3srv := &http3.Server{
-			Addr:       s.ListenAddr,
-			Handler:    s.Handler,
-			QUICConfig: (*quic.Config)(s.QuicConfig),
-		}
-		go s.handleSession(ctx, sess, http3srv)
+		go s.handleSession(ctx, sess)
 	}
 }
 
-func (s *Server) handleSession(ctx context.Context, sess quic.Connection, http3srv *http3.Server) {
+func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 	serverControlStream, err := sess.OpenUniStream()
 	if err != nil {
 		return
@@ -214,12 +209,6 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection, http3s
 		return
 	}
 	req, protocol, err := h3.RequestFromHeaders(hfs)
-
-	if protocol != "webtransport" {
-		http3srv.ListenAndServe()
-		return
-	}
-
 	if err != nil {
 		cancelFunction()
 		requestStream.Close()
@@ -232,10 +221,11 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection, http3s
 	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
 	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
 
-	if !s.validateOrigin(req.Header.Get("origin")) {
+	if protocol != "webtransport" || !s.validateOrigin(req.Header.Get("origin")) {
 		req.Body.(*Session).RejectSession(http.StatusBadRequest)
 		return
 	}
+
 	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
 	go func() {
 		for {
@@ -248,6 +238,7 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection, http3s
 			}
 		}
 	}()
+
 	s.ServeHTTP(rw, req)
 }
 
