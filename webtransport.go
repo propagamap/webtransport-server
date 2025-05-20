@@ -124,7 +124,11 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	tr := quic.Transport{Conn: conn}
 	tlsConf := http3.ConfigureTLSConfig(tlsConfig) // use your tls.Config here
 	quicConf := &quic.Config{}                     // QUIC connection options
-	server := http3.Server{}
+	server := http3.Server{
+		Addr:       s.ListenAddr,
+		Handler:    s.Handler,
+		QUICConfig: (*quic.Config)(s.QuicConfig),
+	}
 	ln, _ := tr.ListenEarly(tlsConf, quicConf)
 	err = server.ServeListener(ln)
 	if err != nil {
