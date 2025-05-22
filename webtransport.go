@@ -133,7 +133,7 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	}()
 
 	for {
-		sess, err := listener.Accept(ctx)
+		conn, err := listener.Accept(ctx)
 		if err != nil {
 			return err
 		}
@@ -143,7 +143,7 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 			Handler: s.Handler,
 		}
 
-		go server.ServeQUICConn(sess)
+		go server.ServeQUICConn(conn)
 		// go 	s.ServeHTTP(rw, req)
 	}
 }
