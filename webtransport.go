@@ -138,6 +138,11 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 			return err
 		}
 		go s.handleSession(ctx, sess)
+
+		server := http3.Server{}
+
+		go server.ServeQUICConn(sess)
+		// go 	s.ServeHTTP(rw, req)
 	}
 }
 
