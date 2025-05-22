@@ -137,7 +137,7 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		if err != nil {
 			return err
 		}
-		go s.handleSession(ctx, sess)
+//		go s.handleSession(ctx, sess)
 
 		server := http3.Server{}
 
