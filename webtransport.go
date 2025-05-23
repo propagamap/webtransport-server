@@ -142,7 +142,6 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 }
 
 func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
-	// Handle WebTransport session
 	serverControlStream, err := sess.OpenUniStream()
 	if err != nil {
 		return
@@ -222,25 +221,25 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
 	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
 
-	if !s.validateOrigin(req.Header.Get("origin")) {
+	if protocol != "webtransport" || !s.validateOrigin(req.Header.Get("origin")) {
 		req.Body.(*Session).RejectSession(http.StatusBadRequest)
 		return
 	}
 
-	if protocol != "webtransport" {
-		requestStream.Close()
-		// Handle HTTP/3 request
-		go func() {
-			server := http3.Server{
-				Handler: s.Handler,
-			}
-			err := server.ServeQUICConn(sess)
-			if err != nil {
-				log.Println(err)
-			}
-		}()
-		return
-	}
+	// if protocol != "webtransport" {
+	// 	requestStream.Close()
+	// 	// Handle HTTP/3 request
+	// 	go func() {
+	// 		server := http3.Server{
+	// 			Handler: s.Handler,
+	// 		}
+	// 		err := server.ServeQUICConn(sess)
+	// 		if err != nil {
+	// 			log.Println(err)
+	// 		}
+	// 	}()
+	// 	return
+	// }
 
 	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
 	go func() {
