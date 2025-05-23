@@ -137,30 +137,6 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		if err != nil {
 			return err
 		}
-		decoder := qpack.NewDecoder(nil)
-		headersFrame := h3.Frame{}
-		hfs, err := decoder.DecodeFull(headersFrame.Data)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-		_, protocol, err := h3.RequestFromHeaders(hfs)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		if protocol != "webtransport" {
-			// Handle HTTP/3 request
-			server := http3.Server{
-				Handler: s.Handler,
-			}
-			err := server.ServeQUICConn(conn)
-			if err != nil {
-				log.Println(err)
-				return err
-			}
-		}
 		go s.handleSession(ctx, conn)
 	}
 }
@@ -246,8 +222,23 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
 	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
 
-	if protocol != "webtransport" || !s.validateOrigin(req.Header.Get("origin")) {
+	if !s.validateOrigin(req.Header.Get("origin")) {
 		req.Body.(*Session).RejectSession(http.StatusBadRequest)
+		return
+	}
+
+	if protocol != "webtransport" {
+		requestStream.Close()
+		// Handle HTTP/3 request
+		go func() {
+			server := http3.Server{
+				Handler: s.Handler,
+			}
+			err := server.ServeQUICConn(sess)
+			if err != nil {
+				log.Println(err)
+			}
+		}()
 		return
 	}
 
