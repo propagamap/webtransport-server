@@ -70,11 +70,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	// "log"
+	"log"
 	"net/http"
 	"net/url"
 
-	// "github.com/marten-seemann/qpack"
+	"github.com/marten-seemann/qpack"
 	"github.com/propagamap/webtransport-server/internal"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -137,126 +137,134 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		if err != nil {
 			return err
 		}
+		decoder := qpack.NewDecoder(nil)
+		headersFrame := h3.Frame{}
+		hfs, err := decoder.DecodeFull(headersFrame.Data)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		_, protocol, err := h3.RequestFromHeaders(hfs)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+
+		if protocol != "webtransport" {
+			// Handle HTTP/3 request
+			server := http3.Server{
+				Handler: s.Handler,
+			}
+			err := server.ServeQUICConn(conn)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+		}
 		go s.handleSession(ctx, conn)
 	}
 }
 
 func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
-
-	server := http3.Server{
-		Handler: s.Handler,
+	// Handle WebTransport session
+	serverControlStream, err := sess.OpenUniStream()
+	if err != nil {
+		return
 	}
-	server.ServeQUICConn(sess)
 
-	// serverControlStream, err := sess.OpenUniStream()
-	// if err != nil {
-	// 	return
-	// }
+	// Write server settings
+	streamHeader := h3.StreamHeader{Type: h3.STREAM_CONTROL}
+	streamHeader.Write(serverControlStream)
 
-	// // Write server settings
-	// streamHeader := h3.StreamHeader{Type: h3.STREAM_CONTROL}
-	// streamHeader.Write(serverControlStream)
+	settingsFrame := (h3.SettingsMap{h3.H3_DATAGRAM_05: 1, h3.ENABLE_WEBTRANSPORT: 1}).ToFrame()
+	settingsFrame.Write(serverControlStream)
 
-	// settingsFrame := (h3.SettingsMap{h3.H3_DATAGRAM_05: 1, h3.ENABLE_WEBTRANSPORT: 1}).ToFrame()
-	// settingsFrame.Write(serverControlStream)
+	// Accept control stream - client settings will appear here
+	clientControlStream, err := sess.AcceptUniStream(context.Background())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	// log.Printf("Read settings from control stream id: %d\n", stream.StreamID())
 
-	// // Accept control stream - client settings will appear here
-	// clientControlStream, err := sess.AcceptUniStream(context.Background())
-	// if err != nil {
-	// 	log.Println(err)
-	// 	return
-	// }
-	// // log.Printf("Read settings from control stream id: %d\n", stream.StreamID())
+	clientSettingsReader := quicvarint.NewReader(clientControlStream)
+	quicvarint.Read(clientSettingsReader)
 
-	// clientSettingsReader := quicvarint.NewReader(clientControlStream)
-	// quicvarint.Read(clientSettingsReader)
+	clientSettingsFrame := h3.Frame{}
+	if clientSettingsFrame.Read(clientControlStream); err != nil || clientSettingsFrame.Type != h3.FRAME_SETTINGS {
+		// log.Println("control stream read error, or not a settings frame")
+		return
+	}
 
-	// clientSettingsFrame := h3.Frame{}
-	// if clientSettingsFrame.Read(clientControlStream); err != nil || clientSettingsFrame.Type != h3.FRAME_SETTINGS {
-	// 	// log.Println("control stream read error, or not a settings frame")
-	// 	return
-	// }
+	// Accept request stream
+	requestStream, err := sess.AcceptStream(ctx)
+	if err != nil {
+		// log.Printf("request stream err: %v", err)
+		return
+	}
+	// log.Printf("request stream accepted: %d", requestStream.StreamID())
 
-	// // Accept request stream
-	// requestStream, err := sess.AcceptStream(ctx)
-	// if err != nil {
-	// 	// log.Printf("request stream err: %v", err)
-	// 	return
-	// }
-	// // log.Printf("request stream accepted: %d", requestStream.StreamID())
+	ctx, cancelFunction := context.WithCancel(requestStream.Context())
+	ctx = context.WithValue(ctx, http3.ServerContextKey, s)
+	ctx = context.WithValue(ctx, http.LocalAddrContextKey, sess.LocalAddr())
 
-	// ctx, cancelFunction := context.WithCancel(requestStream.Context())
-	// ctx = context.WithValue(ctx, http3.ServerContextKey, s)
-	// ctx = context.WithValue(ctx, http.LocalAddrContextKey, sess.LocalAddr())
+	// log.Println(streamType, settingsFrame)
 
-	// // log.Println(streamType, settingsFrame)
+	headersFrame := h3.Frame{}
+	err = headersFrame.Read(requestStream)
+	if err != nil {
+		// log.Printf("request stream ParseNextFrame err: %v", err)
+		cancelFunction()
+		requestStream.Close()
+		return
+	}
+	if headersFrame.Type != h3.FRAME_HEADERS {
+		// log.Println("request stream got not HeadersFrame")
+		cancelFunction()
+		requestStream.Close()
+		return
+	}
 
-	// headersFrame := h3.Frame{}
-	// err = headersFrame.Read(requestStream)
-	// if err != nil {
-	// 	// log.Printf("request stream ParseNextFrame err: %v", err)
-	// 	cancelFunction()
-	// 	requestStream.Close()
-	// 	return
-	// }
-	// if headersFrame.Type != h3.FRAME_HEADERS {
-	// 	// log.Println("request stream got not HeadersFrame")
-	// 	cancelFunction()
-	// 	requestStream.Close()
-	// 	return
-	// }
+	decoder := qpack.NewDecoder(nil)
+	hfs, err := decoder.DecodeFull(headersFrame.Data)
+	if err != nil {
+		// log.Printf("request stream decoder err: %v", err)
+		cancelFunction()
+		requestStream.Close()
+		return
+	}
+	req, protocol, err := h3.RequestFromHeaders(hfs)
+	if err != nil {
+		cancelFunction()
+		requestStream.Close()
+		return
+	}
+	req.RemoteAddr = sess.RemoteAddr().String()
 
-	// decoder := qpack.NewDecoder(nil)
-	// hfs, err := decoder.DecodeFull(headersFrame.Data)
-	// if err != nil {
-	// 	// log.Printf("request stream decoder err: %v", err)
-	// 	cancelFunction()
-	// 	requestStream.Close()
-	// 	return
-	// }
-	// req, protocol, err := h3.RequestFromHeaders(hfs)
-	// if err != nil {
-	// 	cancelFunction()
-	// 	requestStream.Close()
-	// 	return
-	// }
-	// req.RemoteAddr = sess.RemoteAddr().String()
+	req = req.WithContext(ctx)
+	rw := h3.NewResponseWriter(requestStream)
+	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
+	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
 
-	// if protocol == "webtransport" {
-	// 	req = req.WithContext(ctx)
-	// 	rw := h3.NewResponseWriter(requestStream)
-	// 	rw.Header().Add("sec-webtransport-http3-draft", "draft02")
-	// 	req.Body = &Session{Stream: requestStream, Session: sess, ClientControlStream: clientControlStream, ServerControlStream: serverControlStream, responseWriter: rw, context: ctx, cancel: cancelFunction}
+	if protocol != "webtransport" || !s.validateOrigin(req.Header.Get("origin")) {
+		req.Body.(*Session).RejectSession(http.StatusBadRequest)
+		return
+	}
 
-	// 	if !s.validateOrigin(req.Header.Get("origin")) {
-	// 		req.Body.(*Session).RejectSession(http.StatusBadRequest)
-	// 		return
-	// 	}
+	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
+	go func() {
+		for {
+			buf := make([]byte, 1024)
+			_, err := requestStream.Read(buf)
+			if err != nil {
+				cancelFunction()
+				requestStream.Close()
+				break
+			}
+		}
+	}()
 
-	// 	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
-	// 	go func() {
-	// 		for {
-	// 			buf := make([]byte, 1024)
-	// 			_, err := requestStream.Read(buf)
-	// 			if err != nil {
-	// 				cancelFunction()
-	// 				requestStream.Close()
-	// 				break
-	// 			}
-	// 		}
-	// 	}()
-	// 	s.ServeHTTP(rw, req)
-	// } else {
-	// 	server := http3.Server{
-	// 		Handler: s.Handler,
-	// 	}
-	// 	err := server.ServeQUICConn(sess)
-	// 	if err != nil {
-	// 		cancelFunction()
-	// 		requestStream.Close()
-	// 		return
-	// 	}
-	// }
+	s.ServeHTTP(rw, req)
 }
 
 func (s *Server) validateOrigin(origin string) bool {
