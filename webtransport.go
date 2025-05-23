@@ -115,6 +115,7 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	if s.Handler == nil {
 		s.Handler = http.DefaultServeMux
 	}
+
 	if s.QuicConfig == nil {
 		s.QuicConfig = &QuicConfig{}
 	}
@@ -226,33 +227,33 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 		return
 	}
 
-	// if protocol != "webtransport" {
-	// 	requestStream.Close()
-	// 	// Handle HTTP/3 request
-	// 	go func() {
-	// 		server := http3.Server{
-	// 			Handler: s.Handler,
-	// 		}
-	// 		err := server.ServeQUICConn(sess)
-	// 		if err != nil {
-	// 			log.Println(err)
-	// 		}
-	// 	}()
-	// 	return
-	// }
+	if protocol != "webtransport" {
+		requestStream.Close()
+		// Handle HTTP/3 request
+		go func() {
+			server := http3.Server{
+				Handler: s.Handler,
+			}
+			err := server.ServeQUICConn(sess)
+			if err != nil {
+				log.Println(err)
+			}
+		}()
+		return
+	}
 
 	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
-	go func() {
-		for {
-			buf := make([]byte, 1024)
-			_, err := requestStream.Read(buf)
-			if err != nil {
-				cancelFunction()
-				requestStream.Close()
-				break
-			}
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		buf := make([]byte, 1024)
+	// 		_, err := requestStream.Read(buf)
+	// 		if err != nil {
+	// 			cancelFunction()
+	// 			requestStream.Close()
+	// 			break
+	// 		}
+	// 	}
+	// }()
 
 	s.ServeHTTP(rw, req)
 }
