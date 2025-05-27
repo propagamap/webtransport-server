@@ -128,16 +128,22 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		return err
 	}
 
+	http3Server := &http3.Server{
+		Handler: s.Handler,
+	}
+
 	go func() {
 		<-ctx.Done()
 		listener.Close()
 	}()
 
 	for {
-		_, err := listener.Accept(ctx)
+		conn, err := listener.Accept(ctx)
 		if err != nil {
 			return err
 		}
+		go http3Server.ServeQUICConn(conn)
+		// go s.handleSession(ctx, conn)
 	}
 }
 
