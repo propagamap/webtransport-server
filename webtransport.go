@@ -121,7 +121,7 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	}
 	s.QuicConfig.EnableDatagrams = true
 
-	tlsConf := http3.ConfigureTLSConfig(tlsConfig) // use your tls.Config here
+	tlsConf := http3.ConfigureTLSConfig(tlsConfig)
 
 	listener, err := quic.ListenAddr(s.ListenAddr, tlsConf, (*quic.Config)(s.QuicConfig))
 	if err != nil {
@@ -134,11 +134,10 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 	}()
 
 	for {
-		conn, err := listener.Accept(ctx)
+		_, err := listener.Accept(ctx)
 		if err != nil {
 			return err
 		}
-		go s.handleSession(ctx, conn)
 	}
 }
 
@@ -227,33 +226,18 @@ func (s *Server) handleSession(ctx context.Context, sess quic.Connection) {
 		return
 	}
 
-	if protocol != "webtransport" {
-		requestStream.Close()
-		// Handle HTTP/3 request
-		go func() {
-			server := http3.Server{
-				Handler: s.Handler,
-			}
-			err := server.ServeQUICConn(sess)
-			if err != nil {
-				log.Println(err)
-			}
-		}()
-		return
-	}
-
 	// Drain request stream - this is so that we can catch the EOF and shut down cleanly when the client closes the transport
-	// go func() {
-	// 	for {
-	// 		buf := make([]byte, 1024)
-	// 		_, err := requestStream.Read(buf)
-	// 		if err != nil {
-	// 			cancelFunction()
-	// 			requestStream.Close()
-	// 			break
-	// 		}
-	// 	}
-	// }()
+	go func() {
+		for {
+			buf := make([]byte, 1024)
+			_, err := requestStream.Read(buf)
+			if err != nil {
+				cancelFunction()
+				requestStream.Close()
+				break
+			}
+		}
+	}()
 
 	s.ServeHTTP(rw, req)
 }
