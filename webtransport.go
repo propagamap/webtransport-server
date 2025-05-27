@@ -142,38 +142,7 @@ func (s *Server) Run(ctx context.Context, tlsConfig *tls.Config) error {
 		if err != nil {
 			return err
 		}
-		go func() {
-			serverControlStream, err := conn.OpenUniStream()
-			if err != nil {
-				return
-			}
-
-			// Write server settings
-			streamHeader := h3.StreamHeader{Type: h3.STREAM_CONTROL}
-			streamHeader.Write(serverControlStream)
-
-			settingsFrame := (h3.SettingsMap{h3.H3_DATAGRAM_05: 1, h3.ENABLE_WEBTRANSPORT: 1}).ToFrame()
-			settingsFrame.Write(serverControlStream)
-
-			// Accept control stream - client settings will appear here
-			clientControlStream, err := conn.AcceptUniStream(context.Background())
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			// log.Printf("Read settings from control stream id: %d\n", stream.StreamID())
-
-			clientSettingsReader := quicvarint.NewReader(clientControlStream)
-			quicvarint.Read(clientSettingsReader)
-
-			clientSettingsFrame := h3.Frame{}
-			if clientSettingsFrame.Read(clientControlStream); err != nil || clientSettingsFrame.Type != h3.FRAME_SETTINGS {
-				// log.Println("control stream read error, or not a settings frame")
-				return
-			}
-			go http3Server.ServeQUICConn(conn)
-		}()
-		// go http3Server.ServeQUICConn(conn)
+		go http3Server.ServeQUICConn(conn)
 		// go s.handleSession(ctx, conn)
 	}
 }
