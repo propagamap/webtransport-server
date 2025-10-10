@@ -6,7 +6,7 @@ toolchain go1.23.1
 
 require (
 	github.com/marten-seemann/qpack v0.3.0
-	github.com/quic-go/quic-go v0.48.1
+	github.com/quic-go/quic-go v0.49.1
 )
 
 require (
